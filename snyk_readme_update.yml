@@ -1,0 +1,73 @@
+name: 'Snyk Report for README'
+description: 'Goes through JSON of Snyk report and updates the status on the README'
+runs:
+  using: 'composite'
+  steps:
+    - run: |
+        #!/bin/bash
+        set -x
+
+        echo $BASH_VERSION
+
+        # Function to strip ANSI color codes
+        strip_ansi() {
+            sed 's/\x1b\[[0-9;]*m//g'
+        }
+
+        # File paths
+        SNYK_FILE="${GITHUB_WORKSPACE}/snyk_sast.json"
+        README_FILE="${GITHUB_WORKSPACE}/README.md"
+
+        # Initialize counters
+        declare -A counters
+        counters[Critical]=0
+        counters[High]=0
+        counters[Medium]=0
+        counters[Low]=0
+
+        # Process the Snyk output file and update counters
+        while IFS= read -r line; do
+            clean_line=$(echo "$line" | strip_ansi)
+            if [[ $clean_line == ✗\ * ]]; then
+                severity=$(echo $clean_line | awk '{print $2}')
+                
+                # Debugging statement to check the current count
+                echo "Current count for $severity: ${counters[$severity]}"
+
+                # Explicit incrementation
+                counters[$severity]=$(( ${counters[$severity]} + 1 ))
+            fi
+        done < "$SNYK_FILE"
+
+        # Prepare the badge content for README
+        badge_content="<!-- BADGES START -->\n"
+
+        # Explicitly order the severities: Critical, High, Medium, Low
+        for severity in Critical High Medium Low; do
+            count=${counters[$severity]}
+            color="lightgrey"
+            case $severity in
+                Critical) color="red" ;;
+                High) color="orange" ;;
+                Medium) color="yellow" ;;
+                Low) color="green" ;;
+            esac
+            if [[ $count -gt 0 ]]; then
+                badge_content+="![${severity} Vulnerabilities](https://img.shields.io/badge/${severity}--Vulnerabilities-${count}-${color}?style=flat-square&logo=snyk)\n"
+            fi
+        done
+
+        badge_content+="<!-- BADGES END -->\n"
+
+        # Replace or insert the badge content
+        if grep -q "<!-- BADGES START -->" "$README_FILE"; then
+            # Remove old badge section
+            sed -i.bak '/<!-- BADGES START -->/,/<!-- BADGES END -->/d' "$README_FILE"
+
+            # Prepend new badge content
+            echo -e "$badge_content$(cat "$README_FILE")" > "$README_FILE"
+        else
+            # Badge section doesn't exist, just prepend
+            echo -e "$badge_content$(cat "$README_FILE")" > "$README_FILE"
+        fi
+      shell: bash
