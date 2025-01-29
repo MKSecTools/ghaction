@@ -1,5 +1,5 @@
 name: 'Snyk Report for README'
-description: 'Goes through JSON of Snyk report and updates the status on the README'
+description: 'Goes through JSON of Snyk SAST and SCA reports and updates the status on the README'
 runs:
   using: 'composite'
   steps:
@@ -9,42 +9,69 @@ runs:
 
         echo $BASH_VERSION
 
+        #----------------------
+        # Helper functions
+        #----------------------
+
         # Function to strip ANSI color codes
         strip_ansi() {
             sed 's/\x1b\[[0-9;]*m//g'
         }
 
+        #----------------------
         # File paths
-        SNYK_FILE="${GITHUB_WORKSPACE}/snyk_sast.json"
+        #----------------------
+        SNYK_SAST_FILE="${GITHUB_WORKSPACE}/snyk_sast.json"
+        SNYK_SCA_FILE="${GITHUB_WORKSPACE}/snyk_sca.json"
         README_FILE="${GITHUB_WORKSPACE}/README.md"
 
+        #----------------------
         # Initialize counters
-        declare -A counters
-        counters[Critical]=0
-        counters[High]=0
-        counters[Medium]=0
-        counters[Low]=0
+        #----------------------
+        
+        # We’ll keep separate counters for SAST and SCA
+        declare -A SAST_counters=( ["Critical"]=0 ["High"]=0 ["Medium"]=0 ["Low"]=0 )
+        declare -A SCA_counters=( ["Critical"]=0 ["High"]=0 ["Medium"]=0 ["Low"]=0 )
 
-        # Process the Snyk output file and update counters
+        #----------------------
+        # Process SAST file
+        #----------------------
         while IFS= read -r line; do
+            # Remove ANSI color codes
+            clean_line=$(echo "$line" | strip_ansi)
+            # We assume lines with vulnerabilities begin with "✗ " 
+            # and have the severity as the next word
+            if [[ $clean_line == ✗\ * ]]; then
+                severity=$(echo $clean_line | awk '{print $2}')
+                # Increment the appropriate severity counter for SAST
+                SAST_counters[$severity]=$(( ${SAST_counters[$severity]} + 1 ))
+            fi
+        done < "$SNYK_SAST_FILE"
+
+        #----------------------
+        # Process SCA file
+        #----------------------
+        while IFS= read -r line; do
+            # Remove ANSI color codes
             clean_line=$(echo "$line" | strip_ansi)
             if [[ $clean_line == ✗\ * ]]; then
                 severity=$(echo $clean_line | awk '{print $2}')
-                
-                # Debugging statement to check the current count
-                echo "Current count for $severity: ${counters[$severity]}"
-
-                # Explicit incrementation
-                counters[$severity]=$(( ${counters[$severity]} + 1 ))
+                # Increment the appropriate severity counter for SCA
+                SCA_counters[$severity]=$(( ${SCA_counters[$severity]} + 1 ))
             fi
-        done < "$SNYK_FILE"
+        done < "$SNYK_SCA_FILE"
 
-        # Prepare the badge content for README
+        #----------------------
+        # Prepare the badge content
+        #----------------------
         badge_content="<!-- BADGES START -->\n"
 
-        # Explicitly order the severities: Critical, High, Medium, Low
+        # Optional heading
+        badge_content+="## Snyk SAST Vulnerabilities\n"
+
+        # Create badges for SAST
         for severity in Critical High Medium Low; do
-            count=${counters[$severity]}
+            count=${SAST_counters[$severity]}
             color="lightgrey"
             case $severity in
                 Critical) color="red" ;;
@@ -52,14 +79,35 @@ runs:
                 Medium) color="yellow" ;;
                 Low) color="green" ;;
             esac
+
             if [[ $count -gt 0 ]]; then
-                badge_content+="![${severity} Vulnerabilities](https://img.shields.io/badge/${severity}--Vulnerabilities-${count}-${color}?style=flat-square&logo=snyk)\n"
+                badge_content+="![SAST - ${severity}](https://img.shields.io/badge/SAST--${severity}-${count}-${color}?style=flat-square&logo=snyk)\n"
+            fi
+        done
+
+        badge_content+="\n## Snyk SCA Vulnerabilities\n"
+
+        # Create badges for SCA
+        for severity in Critical High Medium Low; do
+            count=${SCA_counters[$severity]}
+            color="lightgrey"
+            case $severity in
+                Critical) color="red" ;;
+                High) color="orange" ;;
+                Medium) color="yellow" ;;
+                Low) color="green" ;;
+            esac
+
+            if [[ $count -gt 0 ]]; then
+                badge_content+="![SCA - ${severity}](https://img.shields.io/badge/SCA--${severity}-${count}-${color}?style=flat-square&logo=snyk)\n"
             fi
         done
 
         badge_content+="<!-- BADGES END -->\n"
 
-        # Replace or insert the badge content
+        #----------------------
+        # Insert/update badges in README
+        #----------------------
         if grep -q "<!-- BADGES START -->" "$README_FILE"; then
             # Remove old badge section
             sed -i.bak '/<!-- BADGES START -->/,/<!-- BADGES END -->/d' "$README_FILE"
